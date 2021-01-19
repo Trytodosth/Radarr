@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentValidation;
 using Nancy;
+using NLog;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Datastore.Events;
@@ -42,6 +44,7 @@ namespace Radarr.Api.V3.Movies
         private readonly IManageCommandQueue _commandQueueManager;
         private readonly IUpgradableSpecification _qualityUpgradableSpecification;
         private readonly IConfigService _configService;
+        private readonly Logger _logger;
 
         public MovieModule(IBroadcastSignalRMessage signalRBroadcaster,
                            IMovieService moviesService,
@@ -59,7 +62,8 @@ namespace Radarr.Api.V3.Movies
                            RecycleBinValidator recycleBinValidator,
                            SystemFolderValidator systemFolderValidator,
                            ProfileExistsValidator profileExistsValidator,
-                           MovieFolderAsRootFolderValidator movieFolderAsRootFolderValidator)
+                           MovieFolderAsRootFolderValidator movieFolderAsRootFolderValidator,
+                           Logger logger)
             : base(signalRBroadcaster)
         {
             _moviesService = moviesService;
@@ -69,6 +73,7 @@ namespace Radarr.Api.V3.Movies
             _configService = configService;
             _coverMapper = coverMapper;
             _commandQueueManager = commandQueueManager;
+            _logger = logger;
 
             GetResourceAll = AllMovie;
             GetResourceById = GetMovie;
@@ -122,26 +127,38 @@ namespace Radarr.Api.V3.Movies
             {
                 var configLanguage = (Language)_configService.MovieInfoLanguage;
                 var availDelay = _configService.AvailabilityDelay;
+                _logger.Debug("Getting all movies");
+
                 var movieTask = Task.Run(() => _moviesService.GetAllMovies());
+                _logger.Debug("started movie task");
 
                 var translations = _movieTranslationService
-                    .GetAllTranslationsForLanguage(configLanguage)
-                    .ToDictionary(x => x.MovieId);
+                    .GetAllTranslationsForLanguage(configLanguage);
+                _logger.Debug("Got translations");
+
+                var tdict = translations.ToDictionary(x => x.Id);
+                _logger.Debug("grouped translactions");
 
                 coverFileInfos = _coverMapper.GetCoverFileInfos();
+                _logger.Debug("got cover file infos");
 
-                var movies = movieTask.GetAwaiter().GetResult();
+                var movies = movieTask.Result;
+                _logger.Debug("Got movies");
 
                 moviesResources = new List<MovieResource>(movies.Count);
 
                 foreach (var movie in movies)
                 {
-                    var translation = GetTranslationFromDict(translations, movie, configLanguage);
-                    var resource = movie.ToResource(availDelay, translation, _qualityUpgradableSpecification);
-                    _coverMapper.ConvertToLocalUrls(resource.Id, resource.Images, coverFileInfos);
-                    moviesResources.Add(resource);
+                    var translation = GetTranslationFromDict(tdict, movie, configLanguage);
+                    moviesResources.Add(movie.ToResource(availDelay, translation, _qualityUpgradableSpecification));
                 }
+
+                _logger.Debug("Mapped resources");
             }
+
+            MapCoversToLocal(moviesResources, coverFileInfos);
+
+            _logger.Debug("Mapped covers; done");
 
             return moviesResources;
         }
@@ -247,6 +264,11 @@ namespace Radarr.Api.V3.Movies
         private void MapCoversToLocal(MovieResource movie)
         {
             _coverMapper.ConvertToLocalUrls(movie.Id, movie.Images);
+        }
+
+        private void MapCoversToLocal(IEnumerable<MovieResource> movies, Dictionary<string, FileInfo> coverFileInfos)
+        {
+            _coverMapper.ConvertToLocalUrls(movies.Select(x => Tuple.Create(x.Id, x.Images.AsEnumerable())), coverFileInfos);
         }
 
         public void Handle(MovieImportedEvent message)
