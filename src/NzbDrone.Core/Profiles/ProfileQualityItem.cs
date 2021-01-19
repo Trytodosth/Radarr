@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using Newtonsoft.Json;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Datastore;
 using NzbDrone.Core.Qualities;
@@ -9,7 +8,6 @@ namespace NzbDrone.Core.Profiles
 {
     public class ProfileQualityItem : IEmbeddedDocument
     {
-        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public int Id { get; set; }
 
         public string Name { get; set; }
